@@ -1,4 +1,5 @@
 import subprocess
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +33,18 @@ def load_audio(source: Path | bytes) -> np.ndarray:
         check=True,
     )
     return np.frombuffer(result.stdout, dtype=np.float32).copy()
+
+
+def read_wav(path: Path) -> np.ndarray:
+    with wave.open(str(path)) as w:
+        if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (
+            1,
+            2,
+            SAMPLE_RATE,
+        ):
+            raise ValueError(f"{path}: expected 16 kHz mono 16-bit PCM")
+        pcm = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16)
+    return pcm.astype(np.float32) / 32768
 
 
 def speech_segments(audio: np.ndarray) -> list[tuple[int, int]]:

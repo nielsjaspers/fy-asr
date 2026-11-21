@@ -10,6 +10,7 @@ import jiwer
 from fy_asr.asr import Transcriber
 from fy_asr.audio import load_audio
 from fy_asr.corpora import Utterance
+from fy_asr.whisper import WhisperTranscriber
 
 
 @dataclass(frozen=True)
@@ -35,7 +36,9 @@ def score(references: Sequence[str], hypotheses: Sequence[str]) -> Score:
     return Score(jiwer.wer(refs, hyps), jiwer.cer(refs, hyps), len(refs))
 
 
-def transcribe(transcriber: Transcriber, utterance: Utterance, long_form: bool) -> str:
+def transcribe(
+    transcriber: Transcriber | WhisperTranscriber, utterance: Utterance, long_form: bool
+) -> str:
     audio = load_audio(Path(utterance.audio))
     if long_form:
         return " ".join(w.text for w in transcriber.long_form(audio))

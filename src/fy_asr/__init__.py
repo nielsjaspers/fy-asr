@@ -2,12 +2,22 @@ import argparse
 from itertools import islice
 from pathlib import Path
 
+from transformers import AutoConfig
+
 from fy_asr.asr import DEFAULT_MODEL, Transcriber
 from fy_asr.audio import load_audio
 from fy_asr.corpora import Utterance, prepare, read_manifest
 from fy_asr.evaluate import score, score_by_source
 from fy_asr.evaluate import transcribe as transcribe_item
 from fy_asr.subtitles import build_cues, to_srt
+from fy_asr.train import TrainConfig, train
+from fy_asr.whisper import WhisperTranscriber
+
+
+def _transcriber(model_id: str) -> Transcriber | WhisperTranscriber:
+    if AutoConfig.from_pretrained(model_id).model_type == "whisper":
+        return WhisperTranscriber(model_id)
+    return Transcriber(model_id)
 
 
 def _first_per_source(
@@ -46,7 +56,18 @@ def main() -> None:
     )
 
     for command in (transcribe, eval_cmd):
-        command.add_argument("--model", help="wav2vec2 CTC checkpoint")
+        command.add_argument("--model", help="wav2vec2 CTC or Whisper checkpoint")
+
+    train_cmd = commands.add_parser(
+        "train", help="LoRA fine-tune Whisper on a train manifest"
+    )
+    train_cmd.add_argument(
+        "--train", type=Path, default=Path("data/prepared/train.jsonl")
+    )
+    train_cmd.add_argument("--dev", type=Path, default=Path("data/prepared/dev.jsonl"))
+    train_cmd.add_argument("--out", type=Path, required=True)
+    train_cmd.add_argument("--epochs", type=int, default=TrainConfig.epochs)
+    train_cmd.add_argument("--lr", type=float, default=TrainConfig.lr)
 
     args = parser.parse_args()
 
@@ -55,7 +76,14 @@ def main() -> None:
             print(f"{name}: {count}")
         return
 
-    transcriber = Transcriber(args.model or DEFAULT_MODEL)
+    if args.command == "train":
+        model = train(
+            TrainConfig(args.train, args.dev, args.out, epochs=args.epochs, lr=args.lr)
+        )
+        print(f"wrote {model}")
+        return
+
+    transcriber = _transcriber(args.model or DEFAULT_MODEL)
 
     if args.command == "transcribe":
         words = transcriber.long_form(load_audio(args.input))
