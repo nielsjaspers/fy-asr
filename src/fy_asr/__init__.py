@@ -1,15 +1,30 @@
 import argparse
+from itertools import islice
 from pathlib import Path
 
 from fy_asr.asr import DEFAULT_MODEL, Transcriber
 from fy_asr.audio import load_audio
-from fy_asr.evaluate import evaluate
+from fy_asr.corpora import Utterance, prepare, read_manifest
+from fy_asr.evaluate import score, score_by_source
+from fy_asr.evaluate import transcribe as transcribe_item
 from fy_asr.subtitles import build_cues, to_srt
+
+
+def _first_per_source(
+    utterances: list[Utterance], limit: int | None
+) -> list[Utterance]:
+    if limit is None:
+        return utterances
+    sources = dict.fromkeys(u.source for u in utterances)
+    return [
+        u
+        for source in sources
+        for u in islice((u for u in utterances if u.source == source), limit)
+    ]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(prog="fy-asr")
-    parser.add_argument("--model", default=DEFAULT_MODEL)
     commands = parser.add_subparsers(dest="command", required=True)
 
     transcribe = commands.add_parser(
@@ -18,21 +33,44 @@ def main() -> None:
     transcribe.add_argument("input", type=Path)
     transcribe.add_argument("-o", "--output", type=Path)
 
-    eval_cmd = commands.add_parser(
-        "eval", help="WER/CER on a parquet file with audio and text columns"
+    prepare_cmd = commands.add_parser(
+        "prepare", help="download the corpora and write train/dev/test manifests"
     )
-    eval_cmd.add_argument("parquet", type=Path)
-    eval_cmd.add_argument("-n", "--limit", type=int, default=200)
+    prepare_cmd.add_argument("--data-dir", type=Path, default=Path("data"))
+
+    eval_cmd = commands.add_parser("eval", help="WER/CER on a JSONL manifest")
+    eval_cmd.add_argument("manifest", type=Path)
+    eval_cmd.add_argument("-n", "--limit", type=int, help="max items per source")
+    eval_cmd.add_argument(
+        "--long-form", action="store_true", help="items are full recordings"
+    )
+
+    for command in (transcribe, eval_cmd):
+        command.add_argument("--model", help="wav2vec2 CTC checkpoint")
 
     args = parser.parse_args()
-    transcriber = Transcriber(args.model)
 
-    match args.command:
-        case "transcribe":
-            words = transcriber.long_form(load_audio(args.input))
-            output = args.output or args.input.with_suffix(".srt")
-            output.write_text(to_srt(build_cues(words)), encoding="utf-8")
-            print(f"wrote {output}")
-        case "eval":
-            wer, cer, clips = evaluate(transcriber, args.parquet, args.limit)
-            print(f"WER {wer:.2%}  CER {cer:.2%}  on {clips} clips")
+    if args.command == "prepare":
+        for name, count in prepare(args.data_dir).items():
+            print(f"{name}: {count}")
+        return
+
+    transcriber = Transcriber(args.model or DEFAULT_MODEL)
+
+    if args.command == "transcribe":
+        words = transcriber.long_form(load_audio(args.input))
+        output = args.output or args.input.with_suffix(".srt")
+        output.write_text(to_srt(build_cues(words)), encoding="utf-8")
+        print(f"wrote {output}")
+        return
+
+    utterances = _first_per_source(read_manifest(args.manifest), args.limit)
+    hypotheses: list[str] = []
+    for utterance in utterances:
+        hypotheses.append(transcribe_item(transcriber, utterance, args.long_form))
+        if args.long_form:
+            print(
+                f"{Path(utterance.audio).name}: {score([utterance.text], hypotheses[-1:])}"
+            )
+    for source, result in score_by_source(utterances, hypotheses).items():
+        print(f"{source:>5}: {result}")
