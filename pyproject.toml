@@ -1,0 +1,31 @@
+[project]
+name = "fy-asr"
+version = "0.1.0"
+description = "Automatic subtitles for West Frisian speech"
+readme = "README.md"
+authors = [
+    { name = "Niels Jaspers", email = "gh@nielsjaspers.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "jiwer>=4.0.0",
+    "numpy>=2.5.5",
+    "pyarrow>=26.0.1",
+    "silero-vad>=6.2.3",
+    "torch>=2.15.0",
+    "transformers>=5.24.0",
+]
+
+[project.scripts]
+fy-asr = "fy_asr:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.2.0",
+    "ruff>=0.17.6",
+]
