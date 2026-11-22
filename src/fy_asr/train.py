@@ -21,7 +21,7 @@ from fy_asr.whisper import BASE_MODEL, LANGUAGE, WINDOW_SECONDS
 GAP_SECONDS = 0.3
 MAX_GAP_SECONDS = 1.0
 MIN_WINDOW_SECONDS = 20.0
-STYLE_PROMPTS = {"bhc": "sûnder haadletters en sûnder ynterpunksje"}
+STYLE_PROMPTS = {"bhc": "sûnder ynterpunksje"}
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
 
 
