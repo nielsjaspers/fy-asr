@@ -74,7 +74,7 @@ def _group(words: Sequence[Word]) -> list[list[Word]]:
                 closing = _end_cost(group[-1].text)
                 if words[end].start - group[-1].end > PAUSE_SECONDS:
                     closing = min(closing, PAUSE_COST)
-            short = sum(len(w.text) + 1 for w in group) <= SHORT_CUE_CHARS
+            short = len(" ".join(w.text for w in group)) <= SHORT_CUE_CHARS
             penalty = SHORT_CUE_COST if short and closing else 0.0
             cost = best[start] + CUE_COST + closing + penalty
             if cost < best[end]:

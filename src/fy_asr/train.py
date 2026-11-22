@@ -206,7 +206,7 @@ def train(config: TrainConfig) -> Path:
     epochs = [pack(train_set, rng, repeat) for _ in range(config.epochs)]
     epochs = [w[: len(w) - len(w) % config.accumulate] for w in epochs]
     total_steps = sum(len(w) for w in epochs) // config.accumulate
-    warmup = min(config.warmup_steps, max(1, total_steps // 10))
+    warmup = max(1, min(config.warmup_steps, total_steps // 10))
 
     model = _model(config.base, config.lora_rank, config.init).to(device)  # pyright: ignore[reportArgumentType]
     model.print_trainable_parameters()
