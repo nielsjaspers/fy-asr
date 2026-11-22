@@ -169,6 +169,8 @@ Trainable = PeftModel | WhisperForConditionalGeneration
 
 
 def _model(base: str, rank: int, init: Path | None, full: bool) -> Trainable:
+    if full and init and (init / "adapter_config.json").exists():
+        raise ValueError(f"{init} is a LoRA adapter; --full needs a full Whisper model")
     model = WhisperForConditionalGeneration.from_pretrained(
         init if full and init else base
     )
@@ -362,6 +364,7 @@ def export(base: str, weights: Path, out: Path) -> Path:
 def _save(base: str, model: WhisperForConditionalGeneration, out: Path) -> Path:
     model.generation_config.forced_decoder_ids = None  # pyright: ignore[reportAttributeAccessIssue]
     model.config.use_cache = True
+    model.generation_config.use_cache = True
     model.save_pretrained(out)
     WhisperFeatureExtractor.from_pretrained(base).save_pretrained(out)
     WhisperTokenizer.from_pretrained(base).save_pretrained(out)

@@ -81,7 +81,9 @@ def main() -> None:
         "--base", default=TrainConfig.base, help="Whisper checkpoint"
     )
     train_cmd.add_argument(
-        "--init", type=Path, help="LoRA adapter to continue training from"
+        "--init",
+        type=Path,
+        help="LoRA adapter (with --full: a full Whisper model) to continue from",
     )
     train_cmd.add_argument(
         "--full", action="store_true", help="train all weights instead of LoRA"
