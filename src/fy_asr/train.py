@@ -21,12 +21,13 @@ from fy_asr.whisper import BASE_MODEL, LANGUAGE, WINDOW_SECONDS
 GAP_SECONDS = 0.3
 MAX_GAP_SECONDS = 1.0
 MIN_WINDOW_SECONDS = 20.0
+STYLE_PROMPTS = {"bhc": "sûnder haadletters en sûnder ynterpunksje"}
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
 
 
 @dataclass(frozen=True)
 class TrainConfig:
-    train: Path
+    train: tuple[Path, ...]
     dev: Path
     out: Path
     base: str = BASE_MODEL
@@ -47,16 +48,22 @@ def gap(a: Utterance, b: Utterance) -> float:
     return GAP_SECONDS
 
 
-def _fill(stream: list[Utterance], rng: random.Random) -> list[list[Utterance]]:
+def _fill(
+    stream: list[Utterance], rng: random.Random, varied: bool
+) -> list[list[Utterance]]:
     windows: list[list[Utterance]] = []
     current: list[Utterance] = []
-    length, target = 0.0, WINDOW_SECONDS
+    length = 0.0
+    target = (
+        rng.uniform(MIN_WINDOW_SECONDS, WINDOW_SECONDS) if varied else WINDOW_SECONDS
+    )
     for u in stream:
         joined = length + gap(current[-1], u) + u.duration if current else u.duration
         if current and (joined > target or current[-1].recording != u.recording):
             windows.append(current)
-            current, length = [], 0.0
-            target = rng.uniform(MIN_WINDOW_SECONDS, WINDOW_SECONDS)
+            current = []
+            if varied:
+                target = rng.uniform(MIN_WINDOW_SECONDS, WINDOW_SECONDS)
             joined = u.duration
         length = joined
         current.append(u)
@@ -73,25 +80,28 @@ def pack(
     """Pack utterances into windows of at most 30 s.
 
     Utterances from the same recording stay in recording order, so a window
-    holds a stretch of real conversation. Other utterances are shuffled.
-    `repeat` packs a source that many times per call.
+    holds a stretch of real conversation, and end at a random length between
+    20 and 30 s. Other utterances are shuffled and fill 30 s windows. `repeat`
+    packs a source that many times per call.
     """
     fits = [u for u in utterances if u.duration <= WINDOW_SECONDS]
-    loose = [u for u in fits if not u.recording]
-    rng.shuffle(loose)
-    windows = _fill(loose, rng)
-    recordings: dict[str, list[Utterance]] = {}
-    for u in fits:
-        if u.recording:
-            recordings.setdefault(u.recording, []).append(u)
-    for source in {u.source for rec in recordings.values() for u in rec}:
+    windows: list[list[Utterance]] = []
+    for source in sorted({u.source for u in fits}):
+        rows = [u for u in fits if u.source == source]
+        loose = [u for u in rows if not u.recording]
+        recordings: dict[str, list[Utterance]] = {}
+        for u in rows:
+            if u.recording:
+                recordings.setdefault(u.recording, []).append(u)
         for _ in range((repeat or {}).get(source, 1)):
-            names = [n for n, rec in recordings.items() if rec[0].source == source]
+            rng.shuffle(loose)
+            windows += _fill(loose, rng, varied=False)
+            names = sorted(recordings)
             rng.shuffle(names)
             stream = [
                 u for n in names for u in sorted(recordings[n], key=lambda u: u.offset)
             ]
-            windows += _fill(stream, rng)
+            windows += _fill(stream, rng, varied=True)
     rng.shuffle(windows)
     return windows
 
@@ -122,15 +132,28 @@ class Collator:
         features = self.features(
             audios, sampling_rate=SAMPLE_RATE, return_tensors="pt"
         ).input_features
-        ids = [
-            self.tokenizer(" ".join(u.text for u in window)).input_ids[1:]
-            for window in batch
-        ]
-        longest = max(len(x) for x in ids)
-        labels = torch.full((len(ids), longest), -100, dtype=torch.long)
-        for row, x in zip(labels, ids):
-            row[: len(x)] = torch.tensor(x)
-        return {"input_features": features, "labels": labels}
+        sequences = [self._sequence(window) for window in batch]
+        longest = max(len(seq) for seq, _ in sequences) - 1
+        inputs = torch.full((len(batch), longest), self.tokenizer.eos_token_id)
+        labels = torch.full((len(batch), longest), -100, dtype=torch.long)
+        for row, (seq, prompt) in enumerate(sequences):
+            inputs[row, : len(seq) - 1] = torch.tensor(seq[:-1])
+            labels[row, prompt : len(seq) - 1] = torch.tensor(seq[prompt + 1 :])
+        return {
+            "input_features": features,
+            "decoder_input_ids": inputs,
+            "labels": labels,
+        }
+
+    def _sequence(self, window: list[Utterance]) -> tuple[list[int], int]:
+        """Decoder tokens for a window and how many of them are an unscored prompt."""
+        target = self.tokenizer(" ".join(u.text for u in window)).input_ids
+        style = STYLE_PROMPTS.get(window[0].source)
+        if style is None:
+            return target, 0
+        prompt = [self.tokenizer.convert_tokens_to_ids("<|startofprev|>")]
+        prompt += self.tokenizer(" " + style, add_special_tokens=False).input_ids
+        return prompt + target, len(prompt)
 
 
 def _device() -> str:
@@ -169,7 +192,7 @@ def train(config: TrainConfig) -> Path:
     rng = random.Random(config.seed)
     torch.manual_seed(config.seed)
     device = _device()
-    train_set = read_manifest(config.train)
+    train_set = [u for path in config.train for u in read_manifest(path)]
     repeat = dict(config.repeat)
     dev_windows = pack(read_manifest(config.dev), random.Random(config.seed))
     dev_loader = DataLoader(

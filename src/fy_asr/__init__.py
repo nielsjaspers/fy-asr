@@ -68,7 +68,10 @@ def main() -> None:
         "train", help="LoRA fine-tune Whisper on a train manifest"
     )
     train_cmd.add_argument(
-        "--train", type=Path, default=Path("data/prepared/train.jsonl")
+        "--train",
+        type=Path,
+        action="append",
+        help="train manifest, repeatable (default data/prepared/train.jsonl)",
     )
     train_cmd.add_argument("--dev", type=Path, default=Path("data/prepared/dev.jsonl"))
     train_cmd.add_argument("--out", type=Path, required=True)
@@ -96,7 +99,7 @@ def main() -> None:
     if args.command == "train":
         model = train(
             TrainConfig(
-                args.train,
+                tuple(args.train or [Path("data/prepared/train.jsonl")]),
                 args.dev,
                 args.out,
                 base=args.base,

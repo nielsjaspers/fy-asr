@@ -47,6 +47,15 @@ def read_wav(path: Path) -> np.ndarray:
     return pcm.astype(np.float32) / 32768
 
 
+def write_wav(path: Path, audio: np.ndarray) -> None:
+    pcm = (np.clip(audio, -1.0, 1.0) * 32767).astype(np.int16)
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(SAMPLE_RATE)
+        w.writeframes(pcm.tobytes())
+
+
 def speech_segments(audio: np.ndarray) -> list[tuple[int, int]]:
     timestamps = get_speech_timestamps(
         torch.from_numpy(audio),

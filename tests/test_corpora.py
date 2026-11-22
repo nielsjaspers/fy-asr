@@ -1,7 +1,12 @@
 import zipfile
 from pathlib import Path
 
-from fy_asr.corpora import _speaker_groups, frisian_transcript
+from fy_asr.corpora import (
+    _speaker_groups,
+    bhc_text,
+    frisian_transcript,
+    textgrid_tier,
+)
 
 
 def segment(recording: str, speaker: str | int, role: str) -> dict:
@@ -55,3 +60,24 @@ def test_frisian_transcript_drops_headers_turn_stamps_and_dutch_translation(
             "word/document.xml", f"<w:document><w:body>{body}</w:body></w:document>"
         )
     assert frisian_transcript(docx) == "Petear trije. No, goeie. Goeiedei."
+
+
+def test_bhc_text_follows_fris_conventions() -> None:
+    assert bhc_text("mar at je in tsjer! eh sterke [jongen kom jij]") == (
+        "mar at je in tsjer uh sterke jongen kom jij"
+    )
+    assert bhc_text("frij folle yn ´t Frysk ehm") == "frij folle yn 't Frysk uh"
+    assert bhc_text("dat ha ik ... dus") is None
+    assert bhc_text("  ") is None
+
+
+def test_textgrid_tier_reads_multiline_and_quoted_text() -> None:
+    grid = (
+        'File type = "ooTextFile"\nObject class = "TextGrid"\n\n0\n5\n<exists>\n2\n'
+        '"IntervalTier"\n"stimulus"\n0\n5\n1\n0\n5\n""\n'
+        '"IntervalTier"\n"orthographic"\n0\n5\n2\n0\n1.5\n"no ""ja""\nsa"\n1.5\n5\n""\n'
+    )
+    assert textgrid_tier(grid, "orthographic") == [
+        (0.0, 1.5, 'no "ja"\nsa'),
+        (1.5, 5.0, ""),
+    ]

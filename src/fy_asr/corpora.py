@@ -4,6 +4,7 @@ import re
 import subprocess
 import tarfile
 import unicodedata
+import wave
 import zipfile
 from collections import defaultdict
 from collections.abc import Iterable
@@ -14,13 +15,17 @@ from typing import Literal
 import pyarrow.parquet as pq
 from huggingface_hub import snapshot_download
 
-Source = Literal["cv22", "fris"]
+from fy_asr.audio import SAMPLE_RATE, load_audio, write_wav
+
+Source = Literal["cv22", "fris", "bhc"]
 Split = Literal["train", "dev", "test"]
 
 CV22 = ("LokaalHub/frisian-asr-cv22", "54a731d22d602f17499abc6455a9cf387cebb49a")
 FRIS = ("Juvoly/Frisian-dialogue", "35769611c51bddbfc877e549a971666a9ac085cd")
 FRIS_HELD_OUT_HOURS: dict[Split, float] = {"test": 2.5, "dev": 1.25}
 FRIS_SPEAKER_ROLES = {"Caregiver", "Patient"}
+BHC_ZIP = "BoarnsterhimCorpus_2.0.zip"
+BHC_TEST_HOURS = 3.0
 
 
 @dataclass(frozen=True)
@@ -146,6 +151,11 @@ def frisian_transcript(docx: Path) -> str:
     return _clean(" ".join(turns))
 
 
+def _wav_seconds(path: Path) -> float:
+    with wave.open(str(path)) as w:
+        return round(w.getnframes() / w.getframerate(), 3)
+
+
 def _audio_seconds(path: Path) -> float:
     result = subprocess.run(
         [
@@ -203,7 +213,7 @@ def _fris(
                 text=text,
                 source="fris",
                 speaker=str(seg["speaker_id"]),
-                duration=seg["duration"],
+                duration=_wav_seconds(wavs[_nfc(Path(seg["audio_filepath"]).name)]),
                 recording=seg["src_audio_filepath"],
                 offset=seg["src_offset"],
             )
@@ -237,6 +247,116 @@ def _fris(
     return segment_rows, long_rows
 
 
+_TEXTGRID_TOKEN = re.compile(r'"((?:[^"]|"")*)"|(\S+)', re.DOTALL)
+
+
+def textgrid_tier(text: str, name: str) -> list[tuple[float, float, str]]:
+    """Intervals of one tier in a short-format Praat TextGrid."""
+    tokens = [
+        (m[1].replace('""', '"') if m[1] is not None else None, m[2])
+        for m in _TEXTGRID_TOKEN.finditer(text)
+    ]
+    i = next(k for k, t in enumerate(tokens) if t[1] == "<exists>") + 2
+    while tokens[i][0] == "IntervalTier":
+        tier, count = tokens[i + 1][0], int(tokens[i + 4][1] or 0)
+        i += 5
+        intervals = [
+            (
+                float(tokens[j][1] or 0),
+                float(tokens[j + 1][1] or 0),
+                tokens[j + 2][0] or "",
+            )
+            for j in range(i, i + 3 * count, 3)
+        ]
+        if tier == name:
+            return intervals
+        i += 3 * count
+    raise KeyError(name)
+
+
+def bhc_text(raw: str) -> str | None:
+    """Normalize a Boarnsterhim phrase to FRIS conventions, or None to skip it.
+
+    `[...]` marks code-switches or overlapped speech, `word!` a self-correction
+    and `...` unintelligible speech (corpus paper, section 3.2).
+    """
+    text = " ".join(raw.replace("´", "'").split())
+    if not text or "..." in text or re.search(r"[^\w\s'\-!\[\]]", text):
+        return None
+    words = [
+        "uh" if w in ("eh", "ehm") else w for w in re.sub(r"[\[\]!]", "", text).split()
+    ]
+    return " ".join(words) or None
+
+
+def _bhc(raw: Path, out: Path) -> tuple[list[Utterance], list[Utterance]] | None:
+    archive = raw / BHC_ZIP
+    if not archive.exists():
+        return None
+    audio_dir = out / "audio" / "bhc"
+    audio_dir.mkdir(parents=True, exist_ok=True)
+    recordings: dict[str, list[Utterance]] = {}
+    with zipfile.ZipFile(archive) as z:
+        grids = sorted(
+            n
+            for n in z.namelist()
+            if re.fullmatch(
+                r"Data/BHC[12]/Frisian/(Spontaneous|Read)/[^/]+\.TextGrid", n
+            )
+        )
+        for grid in grids:
+            stem = Path(grid).stem
+            phrases = [
+                (start, end, text)
+                for start, end, raw_text in textgrid_tier(
+                    z.read(grid).decode("utf-8"), "orthographic"
+                )
+                if (text := bhc_text(raw_text))
+            ]
+            targets = [audio_dir / f"{stem}_{i:04d}.wav" for i in range(len(phrases))]
+            if not all(t.exists() for t in targets):
+                audio = load_audio(z.read(grid.removesuffix(".TextGrid") + ".WAV"))
+                for (start, end, _), target in zip(phrases, targets):
+                    write_wav(
+                        target,
+                        audio[int(start * SAMPLE_RATE) : int(end * SAMPLE_RATE)],
+                    )
+            recordings[stem] = [
+                Utterance(
+                    audio=str(target.relative_to(out)),
+                    text=text,
+                    source="bhc",
+                    speaker=f"bhc{stem[:3]}",
+                    duration=round(end - start, 3),
+                    recording=stem,
+                    offset=round(start, 3),
+                )
+                for (start, end, text), target in zip(phrases, targets)
+            ]
+    held_out = {
+        stem: rows for stem, rows in recordings.items() if stem.endswith("-BHC2-S")
+    }
+    test_speakers: set[str] = set()
+    hours = 0.0
+    for stem in sorted(
+        held_out, key=lambda s: hashlib.sha1(s[:3].encode()).hexdigest()
+    ):
+        if hours >= BHC_TEST_HOURS:
+            break
+        test_speakers.add(stem[:3])
+        hours += sum(u.duration for u in held_out[stem]) / 3600
+    train = [
+        u
+        for stem, rows in recordings.items()
+        if stem[:3] not in test_speakers
+        for u in rows
+    ]
+    test = [
+        u for stem, rows in held_out.items() if stem[:3] in test_speakers for u in rows
+    ]
+    return train, test
+
+
 def prepare(data_dir: Path) -> dict[str, int]:
     raw, out = data_dir / "raw", data_dir / "prepared"
     out.mkdir(parents=True, exist_ok=True)
@@ -264,4 +384,8 @@ def prepare(data_dir: Path) -> dict[str, int]:
         counts[f"longform_{split}"] = _write_manifest(
             out / f"longform_{split}.jsonl", longform[split]
         )
+    bhc = _bhc(raw / "boarnsterhim", out)
+    if bhc:
+        counts["train_bhc"] = _write_manifest(out / "train_bhc.jsonl", bhc[0])
+        counts["test_bhc"] = _write_manifest(out / "test_bhc.jsonl", bhc[1])
     return counts
