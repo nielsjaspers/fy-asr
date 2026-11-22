@@ -200,8 +200,8 @@ def train(config: TrainConfig) -> Path:
         raise FileNotFoundError(
             f"no complete checkpoint in {config.out / 'checkpoints'}"
         )
-    if not config.resume:
-        shutil.rmtree(config.out / "checkpoints", ignore_errors=True)
+    if not config.resume and (config.out / "checkpoints").exists():
+        shutil.rmtree(config.out / "checkpoints")
     rng = random.Random(config.seed)
     torch.manual_seed(config.seed)
     device = _device()
