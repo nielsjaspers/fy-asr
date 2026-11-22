@@ -195,6 +195,13 @@ def _dev_loss(model: PeftModel, loader: DataLoader, device: str) -> float:
 
 
 def train(config: TrainConfig) -> Path:
+    checkpoint = latest_checkpoint(config.out) if config.resume else None
+    if config.resume and checkpoint is None:
+        raise FileNotFoundError(
+            f"no complete checkpoint in {config.out / 'checkpoints'}"
+        )
+    if not config.resume:
+        shutil.rmtree(config.out / "checkpoints", ignore_errors=True)
     rng = random.Random(config.seed)
     torch.manual_seed(config.seed)
     device = _device()
@@ -211,11 +218,6 @@ def train(config: TrainConfig) -> Path:
     total_steps = sum(len(w) for w in epochs) // config.accumulate
     warmup = max(1, min(config.warmup_steps, total_steps // 10))
 
-    checkpoint = latest_checkpoint(config.out) if config.resume else None
-    if config.resume and checkpoint is None:
-        raise FileNotFoundError(
-            f"no complete checkpoint in {config.out / 'checkpoints'}"
-        )
     init = checkpoint / "adapter" if checkpoint else config.init
     model = _model(config.base, config.lora_rank, init).to(device)  # pyright: ignore[reportArgumentType]
     model.print_trainable_parameters()
