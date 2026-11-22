@@ -7,15 +7,17 @@ from transformers import (
 )
 
 from fy_asr.asr import Word
-from fy_asr.audio import SAMPLE_RATE, speech_segments
+from fy_asr.audio import SAMPLE_RATE, merge_segments, speech_segments
 
 BASE_MODEL = "openai/whisper-large-v3-turbo"
 LANGUAGE = "nl"
 WINDOW_SECONDS = 30.0
+MAX_MERGE_GAP_SECONDS = 10.0
 
 
 class WhisperTranscriber:
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, beams: int = 1) -> None:
+        self.beams = beams
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.features = WhisperFeatureExtractor.from_pretrained(model_id)
         self.tokenizer = WhisperTokenizer.from_pretrained(model_id)
@@ -32,7 +34,10 @@ class WhisperTranscriber:
             audio, sampling_rate=SAMPLE_RATE, return_tensors="pt"
         ).input_features
         ids = self.model.generate(
-            inputs.to(self.device, torch.float16), language=LANGUAGE, task="transcribe"
+            inputs.to(self.device, torch.float16),
+            language=LANGUAGE,
+            task="transcribe",
+            num_beams=self.beams,
         )
         assert isinstance(ids, torch.Tensor)
         return self.tokenizer.decode(ids[0], skip_special_tokens=True).strip()
@@ -46,6 +51,7 @@ class WhisperTranscriber:
             inputs.to(self.device, torch.float16),
             language=LANGUAGE,
             task="transcribe",
+            num_beams=self.beams,
             return_token_timestamps=True,
         )
         assert isinstance(out, dict)
@@ -76,8 +82,11 @@ class WhisperTranscriber:
         return words
 
     def long_form(self, audio: np.ndarray) -> list[Word]:
+        chunks = merge_segments(
+            speech_segments(audio), WINDOW_SECONDS, MAX_MERGE_GAP_SECONDS
+        )
         return [
             word
-            for start, end in speech_segments(audio)
+            for start, end in chunks
             for word in self.words(audio[start:end], offset=start / SAMPLE_RATE)
         ]

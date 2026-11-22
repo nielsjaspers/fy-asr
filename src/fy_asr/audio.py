@@ -56,3 +56,20 @@ def speech_segments(audio: np.ndarray) -> list[tuple[int, int]]:
         speech_pad_ms=200,
     )
     return [(ts["start"], ts["end"]) for ts in timestamps]
+
+
+def merge_segments(
+    segments: list[tuple[int, int]], max_seconds: float, max_gap_seconds: float
+) -> list[tuple[int, int]]:
+    merged: list[tuple[int, int]] = []
+    for start, end in segments:
+        if merged:
+            first, last = merged[-1]
+            if (
+                end - first <= max_seconds * SAMPLE_RATE
+                and start - last <= max_gap_seconds * SAMPLE_RATE
+            ):
+                merged[-1] = (first, end)
+                continue
+        merged.append((start, end))
+    return merged
