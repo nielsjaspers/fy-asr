@@ -2,6 +2,7 @@ import argparse
 from itertools import islice
 from pathlib import Path
 
+import torch
 from transformers import AutoConfig
 
 from fy_asr.asr import DEFAULT_MODEL, Transcriber
@@ -13,10 +14,12 @@ from fy_asr.subtitles import build_cues, to_srt
 from fy_asr.train import TrainConfig, train
 from fy_asr.whisper import WhisperTranscriber
 
+MPS_MEMORY_FRACTION = 0.75
 
-def _transcriber(model_id: str) -> Transcriber | WhisperTranscriber:
+
+def _transcriber(model_id: str, beams: int) -> Transcriber | WhisperTranscriber:
     if AutoConfig.from_pretrained(model_id).model_type == "whisper":
-        return WhisperTranscriber(model_id)
+        return WhisperTranscriber(model_id, beams)
     return Transcriber(model_id)
 
 
@@ -57,6 +60,9 @@ def main() -> None:
 
     for command in (transcribe, eval_cmd):
         command.add_argument("--model", help="wav2vec2 CTC or Whisper checkpoint")
+        command.add_argument(
+            "--beams", type=int, default=1, help="beam size for Whisper decoding"
+        )
 
     train_cmd = commands.add_parser(
         "train", help="LoRA fine-tune Whisper on a train manifest"
@@ -68,8 +74,19 @@ def main() -> None:
     train_cmd.add_argument("--out", type=Path, required=True)
     train_cmd.add_argument("--epochs", type=int, default=TrainConfig.epochs)
     train_cmd.add_argument("--lr", type=float, default=TrainConfig.lr)
+    train_cmd.add_argument(
+        "--base", default=TrainConfig.base, help="Whisper checkpoint"
+    )
+    train_cmd.add_argument(
+        "--fris-repeat",
+        type=int,
+        default=dict(TrainConfig.repeat)["fris"],
+        help="times FRIS is packed per epoch",
+    )
 
     args = parser.parse_args()
+    if torch.backends.mps.is_available():
+        torch.mps.set_per_process_memory_fraction(MPS_MEMORY_FRACTION)
 
     if args.command == "prepare":
         for name, count in prepare(args.data_dir).items():
@@ -78,12 +95,20 @@ def main() -> None:
 
     if args.command == "train":
         model = train(
-            TrainConfig(args.train, args.dev, args.out, epochs=args.epochs, lr=args.lr)
+            TrainConfig(
+                args.train,
+                args.dev,
+                args.out,
+                base=args.base,
+                epochs=args.epochs,
+                repeat=(("fris", args.fris_repeat),),
+                lr=args.lr,
+            )
         )
         print(f"wrote {model}")
         return
 
-    transcriber = _transcriber(args.model or DEFAULT_MODEL)
+    transcriber = _transcriber(args.model or DEFAULT_MODEL, args.beams)
 
     if args.command == "transcribe":
         words = transcriber.long_form(load_audio(args.input))

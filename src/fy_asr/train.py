@@ -19,6 +19,8 @@ from fy_asr.corpora import Utterance, read_manifest
 from fy_asr.whisper import BASE_MODEL, LANGUAGE, WINDOW_SECONDS
 
 GAP_SECONDS = 0.3
+MAX_GAP_SECONDS = 1.0
+MIN_WINDOW_SECONDS = 20.0
 LORA_TARGETS = ["q_proj", "k_proj", "v_proj", "out_proj", "fc1", "fc2"]
 
 
@@ -27,7 +29,9 @@ class TrainConfig:
     train: Path
     dev: Path
     out: Path
+    base: str = BASE_MODEL
     epochs: int = 2
+    repeat: tuple[tuple[str, int], ...] = (("fris", 2),)
     accumulate: int = 8
     lr: float = 5e-4
     warmup_steps: int = 100
@@ -37,31 +41,67 @@ class TrainConfig:
     seed: int = 0
 
 
-def pack(utterances: list[Utterance], rng: random.Random) -> list[list[Utterance]]:
-    """Shuffle utterances and concatenate them into windows of at most 30 s."""
-    order = [u for u in utterances if u.duration <= WINDOW_SECONDS]
-    rng.shuffle(order)
+def gap(a: Utterance, b: Utterance) -> float:
+    if a.recording and a.recording == b.recording:
+        return min(max(b.offset - a.offset - a.duration, 0.1), MAX_GAP_SECONDS)
+    return GAP_SECONDS
+
+
+def _fill(stream: list[Utterance], rng: random.Random) -> list[list[Utterance]]:
     windows: list[list[Utterance]] = []
     current: list[Utterance] = []
-    length = 0.0
-    for u in order:
-        if current and length + GAP_SECONDS + u.duration > WINDOW_SECONDS:
+    length, target = 0.0, WINDOW_SECONDS
+    for u in stream:
+        joined = length + gap(current[-1], u) + u.duration if current else u.duration
+        if current and (joined > target or current[-1].recording != u.recording):
             windows.append(current)
             current, length = [], 0.0
-        length += (GAP_SECONDS if current else 0.0) + u.duration
+            target = rng.uniform(MIN_WINDOW_SECONDS, WINDOW_SECONDS)
+            joined = u.duration
+        length = joined
         current.append(u)
     if current:
         windows.append(current)
     return windows
 
 
+def pack(
+    utterances: list[Utterance],
+    rng: random.Random,
+    repeat: dict[str, int] | None = None,
+) -> list[list[Utterance]]:
+    """Pack utterances into windows of at most 30 s.
+
+    Utterances from the same recording stay in recording order, so a window
+    holds a stretch of real conversation. Other utterances are shuffled.
+    `repeat` packs a source that many times per call.
+    """
+    fits = [u for u in utterances if u.duration <= WINDOW_SECONDS]
+    loose = [u for u in fits if not u.recording]
+    rng.shuffle(loose)
+    windows = _fill(loose, rng)
+    recordings: dict[str, list[Utterance]] = {}
+    for u in fits:
+        if u.recording:
+            recordings.setdefault(u.recording, []).append(u)
+    for source in {u.source for rec in recordings.values() for u in rec}:
+        for _ in range((repeat or {}).get(source, 1)):
+            names = [n for n, rec in recordings.items() if rec[0].source == source]
+            rng.shuffle(names)
+            stream = [
+                u for n in names for u in sorted(recordings[n], key=lambda u: u.offset)
+            ]
+            windows += _fill(stream, rng)
+    rng.shuffle(windows)
+    return windows
+
+
 class Collator:
-    def __init__(self) -> None:
-        self.features = WhisperFeatureExtractor.from_pretrained(BASE_MODEL)
+    def __init__(self, base: str) -> None:
+        self.features = WhisperFeatureExtractor.from_pretrained(base)
         self.tokenizer = WhisperTokenizer.from_pretrained(
-            BASE_MODEL, language=LANGUAGE, task="transcribe"
+            base, language=LANGUAGE, task="transcribe"
         )
-        self.gap = np.zeros(int(GAP_SECONDS * SAMPLE_RATE), dtype=np.float32)
 
     def __call__(self, batch: list[list[Utterance]]) -> dict[str, torch.Tensor]:
         audios = [
@@ -69,7 +109,12 @@ class Collator:
                 [
                     part
                     for i, u in enumerate(window)
-                    for part in ([self.gap] if i else []) + [read_wav(Path(u.audio))]
+                    for part in (
+                        [np.zeros(int(gap(window[i - 1], u) * SAMPLE_RATE), np.float32)]
+                        if i
+                        else []
+                    )
+                    + [read_wav(Path(u.audio))]
                 ]
             )[: int(WINDOW_SECONDS * SAMPLE_RATE)]
             for window in batch
@@ -92,8 +137,8 @@ def _device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def _model(rank: int) -> PeftModel:
-    model = WhisperForConditionalGeneration.from_pretrained(BASE_MODEL)
+def _model(base: str, rank: int) -> PeftModel:
+    model = WhisperForConditionalGeneration.from_pretrained(base)
     model.config.use_cache = False
     model.config.apply_spec_augment = True
     model.config.mask_time_prob = 0.05
@@ -125,18 +170,19 @@ def train(config: TrainConfig) -> Path:
     torch.manual_seed(config.seed)
     device = _device()
     train_set = read_manifest(config.train)
+    repeat = dict(config.repeat)
     dev_windows = pack(read_manifest(config.dev), random.Random(config.seed))
     dev_loader = DataLoader(
         dev_windows[: config.dev_windows],  # pyright: ignore[reportArgumentType]
-        collate_fn=Collator(),
+        collate_fn=Collator(config.base),
         num_workers=2,
     )
-    epochs = [pack(train_set, rng) for _ in range(config.epochs)]
+    epochs = [pack(train_set, rng, repeat) for _ in range(config.epochs)]
     epochs = [w[: len(w) - len(w) % config.accumulate] for w in epochs]
     total_steps = sum(len(w) for w in epochs) // config.accumulate
     warmup = min(config.warmup_steps, max(1, total_steps // 10))
 
-    model = _model(config.lora_rank).to(device)  # pyright: ignore[reportArgumentType]
+    model = _model(config.base, config.lora_rank).to(device)  # pyright: ignore[reportArgumentType]
     model.print_trainable_parameters()
     trainable = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=config.lr)
@@ -157,7 +203,7 @@ def train(config: TrainConfig) -> Path:
     for epoch, windows in enumerate(epochs):
         loader = DataLoader(
             windows,  # pyright: ignore[reportArgumentType]
-            collate_fn=Collator(),
+            collate_fn=Collator(config.base),
             num_workers=3,
         )
         for i, batch in enumerate(loader, start=1):
@@ -187,14 +233,14 @@ def train(config: TrainConfig) -> Path:
                 if dev < best:
                     best = dev
                     model.save_pretrained(str(adapter))
-    return merge(adapter, config.out / "model")
+    return merge(config.base, adapter, config.out / "model")
 
 
-def merge(adapter: Path, out: Path) -> Path:
-    base = WhisperForConditionalGeneration.from_pretrained(BASE_MODEL)
-    merged = PeftModel.from_pretrained(base, adapter).merge_and_unload()
+def merge(base: str, adapter: Path, out: Path) -> Path:
+    model = WhisperForConditionalGeneration.from_pretrained(base)
+    merged = PeftModel.from_pretrained(model, adapter).merge_and_unload()
     merged.generation_config.forced_decoder_ids = None
     merged.save_pretrained(out)
-    WhisperFeatureExtractor.from_pretrained(BASE_MODEL).save_pretrained(out)
-    WhisperTokenizer.from_pretrained(BASE_MODEL).save_pretrained(out)
+    WhisperFeatureExtractor.from_pretrained(base).save_pretrained(out)
+    WhisperTokenizer.from_pretrained(base).save_pretrained(out)
     return out

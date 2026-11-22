@@ -30,6 +30,8 @@ class Utterance:
     source: Source
     speaker: str
     duration: float
+    recording: str = ""
+    offset: float = 0.0
 
 
 def read_manifest(path: Path) -> list[Utterance]:
@@ -202,6 +204,8 @@ def _fris(
                 source="fris",
                 speaker=str(seg["speaker_id"]),
                 duration=seg["duration"],
+                recording=seg["src_audio_filepath"],
+                offset=seg["src_offset"],
             )
         )
 
