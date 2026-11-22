@@ -43,6 +43,7 @@ class TrainConfig:
     lora_rank: int = 32
     init: Path | None = None
     resume: bool = False
+    full: bool = False
     seed: int = 0
 
 
@@ -164,11 +165,18 @@ def _device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def _model(base: str, rank: int, init: Path | None) -> PeftModel:
-    model = WhisperForConditionalGeneration.from_pretrained(base)
+Trainable = PeftModel | WhisperForConditionalGeneration
+
+
+def _model(base: str, rank: int, init: Path | None, full: bool) -> Trainable:
+    model = WhisperForConditionalGeneration.from_pretrained(
+        init if full and init else base
+    )
     model.config.use_cache = False
     model.config.apply_spec_augment = True
     model.config.mask_time_prob = 0.05
+    if full:
+        return model
     if init:
         return PeftModel.from_pretrained(model, init, is_trainable=True)
     peft = get_peft_model(
@@ -182,7 +190,7 @@ def _model(base: str, rank: int, init: Path | None) -> PeftModel:
 
 
 @torch.no_grad()
-def _dev_loss(model: PeftModel, loader: DataLoader, device: str) -> float:
+def _dev_loss(model: Trainable, loader: DataLoader, device: str) -> float:
     model.eval()
     total, count = 0.0, 0
     for batch in loader:
@@ -218,9 +226,10 @@ def train(config: TrainConfig) -> Path:
     total_steps = sum(len(w) for w in epochs) // config.accumulate
     warmup = max(1, min(config.warmup_steps, total_steps // 10))
 
-    init = checkpoint / "adapter" if checkpoint else config.init
-    model = _model(config.base, config.lora_rank, init).to(device)  # pyright: ignore[reportArgumentType]
-    model.print_trainable_parameters()
+    init = checkpoint / "weights" if checkpoint else config.init
+    model = _model(config.base, config.lora_rank, init, config.full).to(device)  # pyright: ignore[reportArgumentType]
+    count = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"trainable parameters: {count:,}", flush=True)
     trainable = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=config.lr)
     schedule = torch.optim.lr_scheduler.LambdaLR(
@@ -298,6 +307,8 @@ def train(config: TrainConfig) -> Path:
                 )
     final = latest_checkpoint(config.out)
     assert final is not None
+    if config.full:
+        return export(config.base, final / "best", config.out / "model")
     adapter = config.out / "adapter"
     shutil.rmtree(adapter, ignore_errors=True)
     shutil.copytree(final / "best", adapter)
@@ -312,21 +323,24 @@ def latest_checkpoint(out: Path) -> Path | None:
     return done[-1] if done else None
 
 
-def save_checkpoint(out: Path, model: PeftModel, improved: bool, state: dict) -> None:
+def save_checkpoint(out: Path, model: Trainable, improved: bool, state: dict) -> None:
     """Write a checkpoint for --resume, then delete older ones.
 
-    A checkpoint holds the current adapter, the best adapter so far and the
-    training state. The state file is renamed into place last, so a checkpoint
-    without it is incomplete and the previous one stays valid.
+    A checkpoint holds the current weights (LoRA adapter or full model), the
+    best weights so far and the training state. An unchanged best is hard-linked
+    from the previous checkpoint instead of written again. The state file is
+    renamed into place last, so a checkpoint without it is incomplete and the
+    previous one stays valid.
     """
     previous = latest_checkpoint(out)
     target = out / "checkpoints" / f"{state['step']:07d}"
-    model.save_pretrained(str(target / "adapter"))
+    model.save_pretrained(str(target / "weights"))
     best = target / "best"
     shutil.rmtree(best, ignore_errors=True)
-    shutil.copytree(
-        target / "adapter" if improved or previous is None else previous / "best", best
-    )
+    if improved or previous is None:
+        shutil.copytree(target / "weights", best)
+    else:
+        shutil.copytree(previous / "best", best, copy_function=os.link)
     torch.save(state, target / "state.tmp")
     os.replace(target / "state.tmp", target / "state.pt")
     for old in (out / "checkpoints").glob("*"):
@@ -337,8 +351,18 @@ def save_checkpoint(out: Path, model: PeftModel, improved: bool, state: dict) ->
 def merge(base: str, adapter: Path, out: Path) -> Path:
     model = WhisperForConditionalGeneration.from_pretrained(base)
     merged = PeftModel.from_pretrained(model, adapter).merge_and_unload()
-    merged.generation_config.forced_decoder_ids = None
-    merged.save_pretrained(out)
+    assert isinstance(merged, WhisperForConditionalGeneration)
+    return _save(base, merged, out)
+
+
+def export(base: str, weights: Path, out: Path) -> Path:
+    return _save(base, WhisperForConditionalGeneration.from_pretrained(weights), out)
+
+
+def _save(base: str, model: WhisperForConditionalGeneration, out: Path) -> Path:
+    model.generation_config.forced_decoder_ids = None  # pyright: ignore[reportAttributeAccessIssue]
+    model.config.use_cache = True
+    model.save_pretrained(out)
     WhisperFeatureExtractor.from_pretrained(base).save_pretrained(out)
     WhisperTokenizer.from_pretrained(base).save_pretrained(out)
     return out

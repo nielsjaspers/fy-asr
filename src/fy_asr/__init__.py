@@ -84,6 +84,9 @@ def main() -> None:
         "--init", type=Path, help="LoRA adapter to continue training from"
     )
     train_cmd.add_argument(
+        "--full", action="store_true", help="train all weights instead of LoRA"
+    )
+    train_cmd.add_argument(
         "--resume",
         action="store_true",
         help="continue an interrupted run from its last checkpoint in --out",
@@ -120,6 +123,7 @@ def main() -> None:
                 warmup_steps=args.warmup,
                 init=args.init,
                 resume=args.resume,
+                full=args.full,
             )
         )
         print(f"wrote {model}")
