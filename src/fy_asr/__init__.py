@@ -81,6 +81,12 @@ def main() -> None:
         "--base", default=TrainConfig.base, help="Whisper checkpoint"
     )
     train_cmd.add_argument(
+        "--init", type=Path, help="LoRA adapter to continue training from"
+    )
+    train_cmd.add_argument(
+        "--warmup", type=int, default=TrainConfig.warmup_steps, help="warmup steps"
+    )
+    train_cmd.add_argument(
         "--fris-repeat",
         type=int,
         default=dict(TrainConfig.repeat)["fris"],
@@ -106,6 +112,8 @@ def main() -> None:
                 epochs=args.epochs,
                 repeat=(("fris", args.fris_repeat),),
                 lr=args.lr,
+                warmup_steps=args.warmup,
+                init=args.init,
             )
         )
         print(f"wrote {model}")

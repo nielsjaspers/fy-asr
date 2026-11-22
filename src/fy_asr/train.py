@@ -39,6 +39,7 @@ class TrainConfig:
     eval_every: int = 250
     dev_windows: int = 200
     lora_rank: int = 32
+    init: Path | None = None
     seed: int = 0
 
 
@@ -160,11 +161,13 @@ def _device() -> str:
     return "mps" if torch.backends.mps.is_available() else "cpu"
 
 
-def _model(base: str, rank: int) -> PeftModel:
+def _model(base: str, rank: int, init: Path | None) -> PeftModel:
     model = WhisperForConditionalGeneration.from_pretrained(base)
     model.config.use_cache = False
     model.config.apply_spec_augment = True
     model.config.mask_time_prob = 0.05
+    if init:
+        return PeftModel.from_pretrained(model, init, is_trainable=True)
     peft = get_peft_model(
         model,
         LoraConfig(
@@ -205,7 +208,7 @@ def train(config: TrainConfig) -> Path:
     total_steps = sum(len(w) for w in epochs) // config.accumulate
     warmup = min(config.warmup_steps, max(1, total_steps // 10))
 
-    model = _model(config.base, config.lora_rank).to(device)  # pyright: ignore[reportArgumentType]
+    model = _model(config.base, config.lora_rank, config.init).to(device)  # pyright: ignore[reportArgumentType]
     model.print_trainable_parameters()
     trainable = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=config.lr)
