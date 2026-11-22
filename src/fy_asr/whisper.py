@@ -1,3 +1,5 @@
+import bisect
+
 import numpy as np
 import torch
 from transformers import (
@@ -82,11 +84,29 @@ class WhisperTranscriber:
         return words
 
     def long_form(self, audio: np.ndarray) -> list[Word]:
-        chunks = merge_segments(
-            speech_segments(audio), WINDOW_SECONDS, MAX_MERGE_GAP_SECONDS
-        )
-        return [
+        speech = speech_segments(audio)
+        chunks = merge_segments(speech, WINDOW_SECONDS, MAX_MERGE_GAP_SECONDS)
+        words = [
             word
             for start, end in chunks
             for word in self.words(audio[start:end], offset=start / SAMPLE_RATE)
         ]
+        return snap_starts(
+            words, [(s / SAMPLE_RATE, e / SAMPLE_RATE) for s, e in speech]
+        )
+
+
+def snap_starts(words: list[Word], speech: list[tuple[float, float]]) -> list[Word]:
+    """Start each word no earlier than the speech segment its end falls in.
+
+    A word's start is the end of the token before it, so a word after a pause
+    would otherwise begin during the silence.
+    """
+    onsets = [start for start, _ in speech]
+    snapped: list[Word] = []
+    for word in words:
+        i = bisect.bisect_left(onsets, word.end) - 1
+        if i >= 0 and onsets[i] > word.start:
+            word = Word(word.text, onsets[i], word.end)
+        snapped.append(word)
+    return snapped
