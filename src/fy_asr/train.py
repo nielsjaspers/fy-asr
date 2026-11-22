@@ -1,4 +1,5 @@
 import math
+import os
 import random
 import shutil
 import time
@@ -211,6 +212,10 @@ def train(config: TrainConfig) -> Path:
     warmup = max(1, min(config.warmup_steps, total_steps // 10))
 
     checkpoint = latest_checkpoint(config.out) if config.resume else None
+    if config.resume and checkpoint is None:
+        raise FileNotFoundError(
+            f"no complete checkpoint in {config.out / 'checkpoints'}"
+        )
     init = checkpoint / "adapter" if checkpoint else config.init
     model = _model(config.base, config.lora_rank, init).to(device)  # pyright: ignore[reportArgumentType]
     model.print_trainable_parameters()
@@ -224,7 +229,6 @@ def train(config: TrainConfig) -> Path:
         ),
     )
 
-    adapter = config.out / "adapter"
     best = math.inf
     step = start_epoch = start_window = 0
     if checkpoint:
@@ -274,12 +278,12 @@ def train(config: TrainConfig) -> Path:
             if step % config.eval_every == 0 or step == total_steps:
                 dev = _dev_loss(model, dev_loader, device)
                 print(f"step {step} dev loss {dev:.3f}", flush=True)
-                if dev < best:
-                    best = dev
-                    model.save_pretrained(str(adapter))
+                improved = dev < best
+                best = min(best, dev)
                 save_checkpoint(
                     config.out,
                     model,
+                    improved,
                     {
                         "total_steps": total_steps,
                         "step": step,
@@ -290,6 +294,11 @@ def train(config: TrainConfig) -> Path:
                         "schedule": schedule.state_dict(),
                     },
                 )
+    final = latest_checkpoint(config.out)
+    assert final is not None
+    adapter = config.out / "adapter"
+    shutil.rmtree(adapter, ignore_errors=True)
+    shutil.copytree(final / "best", adapter)
     return merge(config.base, adapter, config.out / "model")
 
 
@@ -301,14 +310,23 @@ def latest_checkpoint(out: Path) -> Path | None:
     return done[-1] if done else None
 
 
-def save_checkpoint(out: Path, model: PeftModel, state: dict) -> None:
+def save_checkpoint(out: Path, model: PeftModel, improved: bool, state: dict) -> None:
     """Write a checkpoint for --resume, then delete older ones.
 
-    The state file is written last, so a checkpoint without it is incomplete.
+    A checkpoint holds the current adapter, the best adapter so far and the
+    training state. The state file is renamed into place last, so a checkpoint
+    without it is incomplete and the previous one stays valid.
     """
+    previous = latest_checkpoint(out)
     target = out / "checkpoints" / f"{state['step']:07d}"
     model.save_pretrained(str(target / "adapter"))
-    torch.save(state, target / "state.pt")
+    best = target / "best"
+    shutil.rmtree(best, ignore_errors=True)
+    shutil.copytree(
+        target / "adapter" if improved or previous is None else previous / "best", best
+    )
+    torch.save(state, target / "state.tmp")
+    os.replace(target / "state.tmp", target / "state.pt")
     for old in (out / "checkpoints").glob("*"):
         if old != target:
             shutil.rmtree(old)
