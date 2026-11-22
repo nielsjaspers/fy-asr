@@ -1,5 +1,6 @@
 import math
 import random
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,6 +41,7 @@ class TrainConfig:
     dev_windows: int = 200
     lora_rank: int = 32
     init: Path | None = None
+    resume: bool = False
     seed: int = 0
 
 
@@ -208,7 +210,9 @@ def train(config: TrainConfig) -> Path:
     total_steps = sum(len(w) for w in epochs) // config.accumulate
     warmup = max(1, min(config.warmup_steps, total_steps // 10))
 
-    model = _model(config.base, config.lora_rank, config.init).to(device)  # pyright: ignore[reportArgumentType]
+    checkpoint = latest_checkpoint(config.out) if config.resume else None
+    init = checkpoint / "adapter" if checkpoint else config.init
+    model = _model(config.base, config.lora_rank, init).to(device)  # pyright: ignore[reportArgumentType]
     model.print_trainable_parameters()
     trainable = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(trainable, lr=config.lr)
@@ -222,17 +226,30 @@ def train(config: TrainConfig) -> Path:
 
     adapter = config.out / "adapter"
     best = math.inf
-    step = 0
+    step = start_epoch = start_window = 0
+    if checkpoint:
+        state = torch.load(checkpoint / "state.pt", weights_only=False)
+        if state["total_steps"] != total_steps:
+            raise ValueError(
+                f"{checkpoint} belongs to a run with other data or settings"
+            )
+        optimizer.load_state_dict(state["optimizer"])
+        schedule.load_state_dict(state["schedule"])
+        step, best = state["step"], state["best"]
+        start_epoch, start_window = state["epoch"], state["window"]
+        print(f"resuming from {checkpoint} at step {step}", flush=True)
+    resumed_at = step
     started = time.time()
     losses: list[float] = []
     model.train()
-    for epoch, windows in enumerate(epochs):
+    for epoch in range(start_epoch, len(epochs)):
+        skip = start_window if epoch == start_epoch else 0
         loader = DataLoader(
-            windows,  # pyright: ignore[reportArgumentType]
+            epochs[epoch][skip:],  # pyright: ignore[reportArgumentType]
             collate_fn=Collator(config.base),
             num_workers=3,
         )
-        for i, batch in enumerate(loader, start=1):
+        for i, batch in enumerate(loader, start=skip + 1):
             with torch.autocast(device, dtype=torch.bfloat16):
                 loss = model(**{k: v.to(device) for k, v in batch.items()}).loss
             (loss / config.accumulate).backward()
@@ -245,7 +262,8 @@ def train(config: TrainConfig) -> Path:
             optimizer.zero_grad()
             step += 1
             if step % 25 == 0:
-                hours = (time.time() - started) / step * (total_steps - step) / 3600
+                done = step - resumed_at
+                hours = (time.time() - started) / done * (total_steps - step) / 3600
                 print(
                     f"epoch {epoch} step {step}/{total_steps} "
                     f"loss {sum(losses) / len(losses):.3f} "
@@ -259,7 +277,41 @@ def train(config: TrainConfig) -> Path:
                 if dev < best:
                     best = dev
                     model.save_pretrained(str(adapter))
+                save_checkpoint(
+                    config.out,
+                    model,
+                    {
+                        "total_steps": total_steps,
+                        "step": step,
+                        "epoch": epoch,
+                        "window": i,
+                        "best": best,
+                        "optimizer": optimizer.state_dict(),
+                        "schedule": schedule.state_dict(),
+                    },
+                )
     return merge(config.base, adapter, config.out / "model")
+
+
+def latest_checkpoint(out: Path) -> Path | None:
+    """The newest checkpoint whose state file was fully written."""
+    done = sorted(
+        d for d in (out / "checkpoints").glob("*") if (d / "state.pt").exists()
+    )
+    return done[-1] if done else None
+
+
+def save_checkpoint(out: Path, model: PeftModel, state: dict) -> None:
+    """Write a checkpoint for --resume, then delete older ones.
+
+    The state file is written last, so a checkpoint without it is incomplete.
+    """
+    target = out / "checkpoints" / f"{state['step']:07d}"
+    model.save_pretrained(str(target / "adapter"))
+    torch.save(state, target / "state.pt")
+    for old in (out / "checkpoints").glob("*"):
+        if old != target:
+            shutil.rmtree(old)
 
 
 def merge(base: str, adapter: Path, out: Path) -> Path:
