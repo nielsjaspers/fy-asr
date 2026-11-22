@@ -52,8 +52,9 @@ def _layout(words: Sequence[str]) -> tuple[str, ...] | None:
 def _group(words: Sequence[Word]) -> list[list[Word]]:
     """Cut words into cues at the lowest total cost.
 
-    A cue must fit two lines and MAX_CUE_SECONDS and may not span a silence
-    longer than MAX_PAUSE_IN_CUE. Cutting after a sentence end is free, at a
+    A cue of two or more words must fit two lines and MAX_CUE_SECONDS and may
+    not span a silence longer than MAX_PAUSE_IN_CUE; a single word always
+    forms a cue. Cutting after a sentence end is free, at a
     pause or after a clause cheap, and anywhere else expensive. Every cue costs
     CUE_COST, so short sentences share a cue, and a short cue that does not end
     a sentence costs SHORT_CUE_COST extra.

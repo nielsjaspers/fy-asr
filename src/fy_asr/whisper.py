@@ -97,7 +97,7 @@ class WhisperTranscriber:
 
 
 def snap_starts(words: list[Word], speech: list[tuple[float, float]]) -> list[Word]:
-    """Start each word no earlier than the speech segment its end falls in.
+    """Start each word no earlier than the last speech onset before its end.
 
     A word's start is the end of the token before it, so a word after a pause
     would otherwise begin during the silence.
