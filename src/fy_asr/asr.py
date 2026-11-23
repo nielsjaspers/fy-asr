@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 
 import numpy as np
@@ -5,6 +6,8 @@ import torch
 from transformers import Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec2ForCTC
 
 from fy_asr.audio import SAMPLE_RATE, speech_segments
+
+TAG = re.compile(r"\[[^\]]*\]")
 
 
 @dataclass(frozen=True)
@@ -31,11 +34,12 @@ class Transcriber:
         decoded = self.tokenizer.decode(ids, output_word_offsets=True)
         return [
             Word(
-                text=w["word"],
+                text=text,
                 start=offset + w["start_offset"] * self.seconds_per_frame,
                 end=offset + w["end_offset"] * self.seconds_per_frame,
             )
             for w in decoded.word_offsets
+            if (text := TAG.sub("", w["word"]))
         ]
 
     def text(self, audio: np.ndarray) -> str:
