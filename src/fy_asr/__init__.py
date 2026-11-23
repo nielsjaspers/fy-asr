@@ -5,7 +5,7 @@ from pathlib import Path
 import torch
 from transformers import AutoConfig
 
-from fy_asr.asr import DEFAULT_MODEL, Transcriber
+from fy_asr.asr import Transcriber
 from fy_asr.audio import load_audio
 from fy_asr.corpora import Utterance, prepare, read_manifest
 from fy_asr.evaluate import score, score_by_source
@@ -15,6 +15,7 @@ from fy_asr.train import TrainConfig, train
 from fy_asr.whisper import WhisperTranscriber
 
 MPS_MEMORY_FRACTION = 0.75
+DEFAULT_MODEL = "nielsjaspers/whisper-large-v3-turbo-fy"
 
 
 def _transcriber(model_id: str, beams: int) -> Transcriber | WhisperTranscriber:
@@ -59,7 +60,11 @@ def main() -> None:
     )
 
     for command in (transcribe, eval_cmd):
-        command.add_argument("--model", help="wav2vec2 CTC or Whisper checkpoint")
+        command.add_argument(
+            "--model",
+            default=DEFAULT_MODEL,
+            help="Whisper or wav2vec2 CTC checkpoint (default: %(default)s)",
+        )
         command.add_argument(
             "--beams", type=int, default=1, help="beam size for Whisper decoding"
         )
@@ -131,7 +136,7 @@ def main() -> None:
         print(f"wrote {model}")
         return
 
-    transcriber = _transcriber(args.model or DEFAULT_MODEL, args.beams)
+    transcriber = _transcriber(args.model, args.beams)
 
     if args.command == "transcribe":
         words = transcriber.long_form(load_audio(args.input))

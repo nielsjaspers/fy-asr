@@ -6,8 +6,6 @@ from transformers import Wav2Vec2CTCTokenizer, Wav2Vec2FeatureExtractor, Wav2Vec
 
 from fy_asr.audio import SAMPLE_RATE, speech_segments
 
-DEFAULT_MODEL = "greenw0lf/wav2vec2-large-xls-r-1b-frisian"
-
 
 @dataclass(frozen=True)
 class Word:
@@ -17,7 +15,7 @@ class Word:
 
 
 class Transcriber:
-    def __init__(self, model_id: str = DEFAULT_MODEL) -> None:
+    def __init__(self, model_id: str) -> None:
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.features = Wav2Vec2FeatureExtractor.from_pretrained(model_id)
         self.tokenizer = Wav2Vec2CTCTokenizer.from_pretrained(model_id)
