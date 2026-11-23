@@ -4,3 +4,4 @@ __pycache__/
 data/
 *.srt
 models/
+.DS_Store
