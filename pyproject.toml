@@ -1,7 +1,8 @@
 [project]
 name = "fy-asr"
 version = "0.1.0"
-description = "Automatic subtitles for West Frisian speech"
+description = "Speech recognition for spontaneous West Frisian, with subtitle output"
+license = "MIT"
 readme = "README.md"
 authors = [
     { name = "Niels Jaspers", email = "gh@nielsjaspers.com" }
