@@ -172,7 +172,8 @@ def _model(base: str, rank: int, init: Path | None, full: bool) -> Trainable:
     if full and init and (init / "adapter_config.json").exists():
         raise ValueError(f"{init} is a LoRA adapter; --full needs a full Whisper model")
     model = WhisperForConditionalGeneration.from_pretrained(
-        init if full and init else base
+        init if full and init else base,
+        dtype=torch.float32 if full else "auto",
     )
     model.config.use_cache = False
     model.config.apply_spec_augment = True
