@@ -179,6 +179,7 @@ def _model(base: str, rank: int, init: Path | None, full: bool) -> Trainable:
     model.config.apply_spec_augment = True
     model.config.mask_time_prob = 0.05
     if full:
+        model.gradient_checkpointing_enable({"use_reentrant": False})
         return model
     if init:
         return PeftModel.from_pretrained(model, init, is_trainable=True)
