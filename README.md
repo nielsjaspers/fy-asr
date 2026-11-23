@@ -76,9 +76,10 @@ The trained model is written to `<out>/model`. A checkpoint is written every 250
 ```sh
 uv run fy-asr eval data/prepared/test.jsonl
 uv run fy-asr eval data/prepared/longform_test.jsonl --long-form --beams 5
+uv run fy-asr eval data/prepared/test.jsonl --model bartelds/whisper-large-v3-turbo-fy-cv22 --language auto
 ```
 
-`--long-form` runs the full transcription pipeline on each recording. `-n` limits the number of items per source.
+`--long-form` runs the full transcription pipeline on each recording. `-n` limits the number of items per source. `--language auto` lets Whisper detect the language instead of forcing `nl`.
 
 ## Results
 
@@ -97,7 +98,7 @@ The best publishable model is `whisper-large-v3-turbo-fy` (`open-full`). `privat
 
 - **wav2vec2 baseline:** [`greenw0lf/wav2vec2-large-xls-r-1b-frisian`](https://huggingface.co/greenw0lf/wav2vec2-large-xls-r-1b-frisian), XLS-R 1B fine-tuned on Common Voice Frisian.
 - **Amooie et al.:** [`Reihaneh/wav2vec2_fy_nl_best_frisian_1`](https://huggingface.co/Reihaneh/wav2vec2_fy_nl_best_frisian_1), XLS-R 1B fine-tuned on Frisian and Dutch ([Amooie et al., 2025](https://arxiv.org/abs/2502.04883), which reports 13.1% on Common Voice 17). The model starts every transcript with a `[FY-NL]` language-ID tag, a label from its training setup rather than spoken words; the transcriber removes it. With the tag removed, its Common Voice 17 result matches the 13.1% the paper reports.
-- **Bartelds:** [`bartelds/whisper-large-v3-turbo-fy-cv22`](https://huggingface.co/bartelds/whisper-large-v3-turbo-fy-cv22), the same Whisper base fine-tuned on Common Voice 22, decoded with its own language detection. Its training data includes every sentence of the Common Voice test sets, so it is not scored there.
+- **Bartelds:** [`bartelds/whisper-large-v3-turbo-fy-cv22`](https://huggingface.co/bartelds/whisper-large-v3-turbo-fy-cv22), the same Whisper base fine-tuned on Common Voice 22, decoded with its own language detection (`--language auto`). Its training data includes every sentence of the Common Voice test sets, so it is not scored there.
 - The Common Voice 17 test set comes from the [`fsicoli/common_voice_17_0`](https://huggingface.co/datasets/fsicoli/common_voice_17_0) mirror and is not part of `prepare`. It shares 98% of its clips with the Common Voice 22 test set. None of its clips or speakers are in the training data of the models in this repo or of Amooie et al.; apart from 8 everyday phrases such as "dat wit ik net", neither are its sentences.
 - Models trained only on read speech stay near 60% on conversation. Training on spontaneous speech matters more than the choice of architecture. Training all weights instead of LoRA adapters helps most on long-form conversation (0.9 points); Boarnsterhim data helps most on speech like its own.
 

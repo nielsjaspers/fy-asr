@@ -12,15 +12,19 @@ from fy_asr.evaluate import score, score_by_source
 from fy_asr.evaluate import transcribe as transcribe_item
 from fy_asr.subtitles import build_cues, to_srt
 from fy_asr.train import TrainConfig, train
-from fy_asr.whisper import WhisperTranscriber
+from fy_asr.whisper import LANGUAGE, WhisperTranscriber
 
 MPS_MEMORY_FRACTION = 0.75
 DEFAULT_MODEL = "nielsjaspers/whisper-large-v3-turbo-fy"
 
 
-def _transcriber(model_id: str, beams: int) -> Transcriber | WhisperTranscriber:
+def _transcriber(
+    model_id: str, beams: int, language: str
+) -> Transcriber | WhisperTranscriber:
     if AutoConfig.from_pretrained(model_id).model_type == "whisper":
-        return WhisperTranscriber(model_id, beams)
+        return WhisperTranscriber(
+            model_id, beams, None if language == "auto" else language
+        )
     return Transcriber(model_id)
 
 
@@ -67,6 +71,11 @@ def main() -> None:
         )
         command.add_argument(
             "--beams", type=int, default=1, help="beam size for Whisper decoding"
+        )
+        command.add_argument(
+            "--language",
+            default=LANGUAGE,
+            help="Whisper language token, or 'auto' to detect it (default: %(default)s)",
         )
 
     train_cmd = commands.add_parser(
@@ -136,7 +145,7 @@ def main() -> None:
         print(f"wrote {model}")
         return
 
-    transcriber = _transcriber(args.model, args.beams)
+    transcriber = _transcriber(args.model, args.beams, args.language)
 
     if args.command == "transcribe":
         words = transcriber.long_form(load_audio(args.input))

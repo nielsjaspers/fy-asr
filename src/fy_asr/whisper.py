@@ -18,8 +18,11 @@ MAX_MERGE_GAP_SECONDS = 10.0
 
 
 class WhisperTranscriber:
-    def __init__(self, model_id: str, beams: int = 1) -> None:
+    def __init__(
+        self, model_id: str, beams: int = 1, language: str | None = LANGUAGE
+    ) -> None:
         self.beams = beams
+        self.language = language
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.features = WhisperFeatureExtractor.from_pretrained(model_id)
         self.tokenizer = WhisperTokenizer.from_pretrained(model_id)
@@ -37,7 +40,7 @@ class WhisperTranscriber:
         ).input_features
         ids = self.model.generate(
             inputs.to(self.device, torch.float16),
-            language=LANGUAGE,
+            language=self.language,
             task="transcribe",
             num_beams=self.beams,
         )
@@ -51,7 +54,7 @@ class WhisperTranscriber:
         ).input_features
         out = self.model.generate(
             inputs.to(self.device, torch.float16),
-            language=LANGUAGE,
+            language=self.language,
             task="transcribe",
             num_beams=self.beams,
             return_token_timestamps=True,
