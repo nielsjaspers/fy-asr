@@ -19,7 +19,7 @@ uv sync
 uv run fy-asr transcribe recording.mp4 --beams 5
 ```
 
-This writes `recording.srt` next to the input (`-o` sets another path). The default model is [`nielsjaspers/whisper-large-v3-turbo-fy`](https://huggingface.co/nielsjaspers/whisper-large-v3-turbo-fy), which is downloaded from Hugging Face on first use (1.6 GB). `--model` takes a model you trained yourself (such as `models/whisper-large-v3-turbo-fy/model`, see [Training](#training)) or any other Whisper or wav2vec2 CTC checkpoint. `--beams 5` is about 1 WER point better than greedy decoding and about 3 times slower.
+This writes `recording.srt` next to the input (`-o` sets another path). The default model is [`nielsjaspers/whisper-large-v3-turbo-fy`](https://huggingface.co/nielsjaspers/whisper-large-v3-turbo-fy), which is downloaded from Hugging Face on first use (1.6 GB). `--model` takes a model you trained yourself (such as `models/whisper-large-v3-turbo-fy/model`, see [Training](#training)) or any other Whisper or wav2vec2 CTC checkpoint. `--beams 5` lowers WER from 19.3% to 18.9% on the FRIS long-form test and is about 3 times slower.
 
 ## How it works
 
@@ -83,7 +83,7 @@ uv run fy-asr eval data/prepared/test.jsonl --model bartelds/whisper-large-v3-tu
 
 ## Results
 
-Word error rate on held-out test sets with unseen speakers, after lowercasing and removing punctuation. Greedy decoding unless stated. Bold marks the lowest WER on each test set. All model choices were made on the dev sets.
+Word error rate on held-out test sets with unseen speakers, after lowercasing and removing punctuation. Greedy decoding unless stated. Bold marks the lowest WER on each test set. All choices for the open models were made on the dev sets.
 
 | Test set | wav2vec2 baseline | Amooie et al. | Bartelds | `open-lora` | [`whisper-large-v3-turbo-fy`](https://huggingface.co/nielsjaspers/whisper-large-v3-turbo-fy) (`open-full`) | `private-lora` |
 |---|---|---|---|---|---|---|
@@ -94,13 +94,13 @@ Word error rate on held-out test sets with unseen speakers, after lowercasing an
 | FRIS long-form, beam 5 |  |  |  | 19.7% | 18.9% | **18.8%** |
 | Boarnsterhim, 9 speakers, 3.1 h (home interviews) | 58.7% | 64.9% | 74.2% | 34.6% | 34.5% | **23.1%** |
 
-The best publishable model is `whisper-large-v3-turbo-fy` (`open-full`). `private-lora` scores best on four test sets, but it is trained on Boarnsterhim and cannot be published (see [Boarnsterhim](#boarnsterhim-optional-restricted)).
+The best publishable model is `whisper-large-v3-turbo-fy` (`open-full`). `private-lora` scores best on Common Voice and Boarnsterhim, but it is trained on Boarnsterhim and cannot be published (see [Boarnsterhim](#boarnsterhim-optional-restricted)).
 
 - **wav2vec2 baseline:** [`greenw0lf/wav2vec2-large-xls-r-1b-frisian`](https://huggingface.co/greenw0lf/wav2vec2-large-xls-r-1b-frisian), XLS-R 1B fine-tuned on Common Voice Frisian.
 - **Amooie et al.:** [`Reihaneh/wav2vec2_fy_nl_best_frisian_1`](https://huggingface.co/Reihaneh/wav2vec2_fy_nl_best_frisian_1), XLS-R 1B fine-tuned on Frisian and Dutch ([Amooie et al., 2025](https://arxiv.org/abs/2502.04883), which reports 13.1% on Common Voice 17). The model starts every transcript with a `[FY-NL]` language-ID tag, a label from its training setup rather than spoken words; the transcriber removes it. With the tag removed, its Common Voice 17 result matches the 13.1% the paper reports.
 - **Bartelds:** [`bartelds/whisper-large-v3-turbo-fy-cv22`](https://huggingface.co/bartelds/whisper-large-v3-turbo-fy-cv22), the same Whisper base fine-tuned on Common Voice 22, decoded with its own language detection (`--language auto`). Its training data includes every sentence of the Common Voice test sets, so it is not scored there.
 - The Common Voice 17 test set comes from the [`fsicoli/common_voice_17_0`](https://huggingface.co/datasets/fsicoli/common_voice_17_0) mirror and is not part of `prepare`. It shares 98% of its clips with the Common Voice 22 test set. None of its clips or speakers are in the training data of the models in this repo or of Amooie et al.; apart from 8 everyday phrases such as "dat wit ik net", neither are its sentences.
-- Models trained only on read speech stay near 60% on conversation. Training on spontaneous speech matters more than the choice of architecture. Training all weights instead of LoRA adapters helps most on long-form conversation (0.9 points); Boarnsterhim data helps most on speech like its own.
+- Models trained only on read speech stay near 60% on conversation. The models in this repo, trained with FRIS conversations, reach about 20%. They also do better on Boarnsterhim, a corpus of spontaneous speech they never saw (34.5% against 58.7 to 74.2%). Training all weights instead of LoRA adapters helps most on long-form conversation (0.9 points); Boarnsterhim data helps most on speech like its own.
 
 ## Development
 
