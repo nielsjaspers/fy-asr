@@ -8,7 +8,7 @@ Speech recognition for West Frisian (Frysk), tuned for long recordings of sponta
 | `open-lora` | Common Voice 22 + FRIS | LoRA adapters | yes |
 | `private-lora` | `open-lora`, continued with Boarnsterhim | LoRA adapters | no (see [Boarnsterhim](#boarnsterhim-optional-restricted)) |
 
-On 4.6 hours of held-out doctor-patient conversations, `open-full` reaches 19.3% WER (18.9% with beam search), against 58 to 62% for three public Frisian models ([results](#results)).
+On 4.6 hours of held-out doctor-patient conversations, `open-full` reaches 19.3% WER (18.9% with beam search), against 58 to 62% for four public models with Frisian support ([results](#results)).
 
 ## Quick start
 
@@ -85,22 +85,23 @@ uv run fy-asr eval data/prepared/test.jsonl --model bartelds/whisper-large-v3-tu
 
 Word error rate on held-out test sets with unseen speakers, after lowercasing and removing punctuation. Greedy decoding unless stated. Bold marks the lowest WER on each test set. All choices for the open models were made on the dev sets.
 
-| Test set | wav2vec2 baseline | Amooie et al. | Bartelds | `open-lora` | [`whisper-large-v3-turbo-fy`](https://huggingface.co/nielsjaspers/whisper-large-v3-turbo-fy) (`open-full`) | `private-lora` |
-|---|---|---|---|---|---|---|
-| Common Voice 17, 3,171 clips (read) | 14.8% | 13.4% | n/a | 10.3% | 10.0% | **9.4%** |
-| Common Voice 22, 3,173 clips (read) | 14.7% | 13.3% | n/a | 10.2% | 9.9% | **9.3%** |
-| FRIS, 1,770 clips (conversation) | 59.8% | 57.8% | 66.1% | 20.8% | **20.5%** | 20.6% |
-| FRIS long-form, 24 recordings, 4.6 h | 59.3% | 62.4% | 58.2% | 20.2% | **19.3%** | 19.7% |
-| FRIS long-form, beam 5 |  |  |  | 19.7% | 18.9% | **18.8%** |
-| Boarnsterhim, 9 speakers, 3.1 h (home interviews) | 58.7% | 64.9% | 74.2% | 34.6% | 34.5% | **23.1%** |
+| Test set | wav2vec2 baseline | Amooie et al. | Bartelds | Meta Omnilingual | `open-lora` | [`whisper-large-v3-turbo-fy`](https://huggingface.co/nielsjaspers/whisper-large-v3-turbo-fy) (`open-full`) | `private-lora` |
+|---|---|---|---|---|---|---|---|
+| Common Voice 17, 3,171 clips (read) | 14.8% | 13.4% | n/a | 14.2% | 10.3% | 10.0% | **9.4%** |
+| Common Voice 22, 3,173 clips (read) | 14.7% | 13.3% | n/a | 14.1% | 10.2% | 9.9% | **9.3%** |
+| FRIS, 1,770 clips (conversation) | 59.8% | 57.8% | 66.1% | 54.1% | 20.8% | **20.5%** | 20.6% |
+| FRIS long-form, 24 recordings, 4.6 h | 59.3% | 62.4% | 58.2% | 57.8% | 20.2% | **19.3%** | 19.7% |
+| FRIS long-form, beam 5 |  |  |  |  | 19.7% | 18.9% | **18.8%** |
+| Boarnsterhim, 9 speakers, 3.1 h (home interviews) | 58.7% | 64.9% | 74.2% | 55.3% | 34.6% | 34.5% | **23.1%** |
 
 The best publishable model is `whisper-large-v3-turbo-fy` (`open-full`). `private-lora` scores best on Common Voice and Boarnsterhim, but it is trained on Boarnsterhim and cannot be published (see [Boarnsterhim](#boarnsterhim-optional-restricted)).
 
 - **wav2vec2 baseline:** [`greenw0lf/wav2vec2-large-xls-r-1b-frisian`](https://huggingface.co/greenw0lf/wav2vec2-large-xls-r-1b-frisian), XLS-R 1B fine-tuned on Common Voice Frisian.
 - **Amooie et al.:** [`Reihaneh/wav2vec2_fy_nl_best_frisian_1`](https://huggingface.co/Reihaneh/wav2vec2_fy_nl_best_frisian_1), XLS-R 1B fine-tuned on Frisian and Dutch ([Amooie et al., 2025](https://arxiv.org/abs/2502.04883), which reports 13.1% on Common Voice 17). The model starts every transcript with a `[FY-NL]` language-ID tag, a label from its training setup rather than spoken words; the transcriber removes it. With the tag removed, its Common Voice 17 result matches the 13.1% the paper reports.
 - **Bartelds:** [`bartelds/whisper-large-v3-turbo-fy-cv22`](https://huggingface.co/bartelds/whisper-large-v3-turbo-fy-cv22), the same Whisper base fine-tuned on Common Voice 22, decoded with its own language detection (`--language auto`). Its training data includes every sentence of the Common Voice test sets, so it is not scored there.
+- **Meta Omnilingual:** [`omniASR_LLM_7B_v2`](https://github.com/facebookresearch/omnilingual-asr), the largest supervised model of Meta's Omnilingual ASR (7.8B parameters), decoded in BF16 with the West Frisian language code (`fry_Latn`). Its dependencies conflict with this repo's, so it was run with Meta's own inference pipeline and scored with the same test sets and normalization. Long-form recordings were cut into the same 30 s VAD windows as the Whisper models. Its Common Voice CER (4.0%) matches the Frisian CER that Meta reports. On conversation it often writes Dutch forms, such as "heel" for "hiel", and "het" and "wel", which do not occur in the FRIS references.
 - The Common Voice 17 test set comes from the [`fsicoli/common_voice_17_0`](https://huggingface.co/datasets/fsicoli/common_voice_17_0) mirror and is not part of `prepare`. It shares 98% of its clips with the Common Voice 22 test set. None of its clips or speakers are in the training data of the models in this repo or of Amooie et al.; apart from 8 everyday phrases such as "dat wit ik net", neither are its sentences.
-- Models trained only on read speech stay near 60% on conversation. The models in this repo, trained with FRIS conversations, reach about 20%. They also do better on Boarnsterhim, a corpus of spontaneous speech they never saw (34.5% against 58.7 to 74.2%). Training all weights instead of LoRA adapters helps most on long-form conversation (0.9 points); Boarnsterhim data helps most on speech like its own.
+- Models trained without Frisian conversation stay between 54 and 66% on conversation. The models in this repo, trained with FRIS conversations, reach about 20%. They also do better on Boarnsterhim, a corpus of spontaneous speech they never saw (34.5% against 55.3 to 74.2%). Training all weights instead of LoRA adapters helps most on long-form conversation (0.9 points); Boarnsterhim data helps most on speech like its own.
 
 ## Development
 
@@ -119,6 +120,6 @@ The code is released under the [MIT license](LICENSE).
 - [Project FRIS Frisian dialogue corpus](https://huggingface.co/datasets/Juvoly/Frisian-dialogue), Juvoly, CC BY-SA 4.0. Because of this license, the published models (`open-full`, `open-lora`) are released under CC BY-SA 4.0.
 - Boarnsterhim Corpus (Version 2.0) (2025) [Data set]. Available at the Dutch Language Institute: http://hdl.handle.net/10032/tm-a3-c6. Fryske Akademy. Used only for `private-lora` and the Boarnsterhim test set, under its non-commercial license.
 - [Silero VAD](https://github.com/snakers4/silero-vad), MIT license.
-- Comparison models: [`greenw0lf/wav2vec2-large-xls-r-1b-frisian`](https://huggingface.co/greenw0lf/wav2vec2-large-xls-r-1b-frisian), [`Reihaneh/wav2vec2_fy_nl_best_frisian_1`](https://huggingface.co/Reihaneh/wav2vec2_fy_nl_best_frisian_1), [`bartelds/whisper-large-v3-turbo-fy-cv22`](https://huggingface.co/bartelds/whisper-large-v3-turbo-fy-cv22).
+- Comparison models: [`greenw0lf/wav2vec2-large-xls-r-1b-frisian`](https://huggingface.co/greenw0lf/wav2vec2-large-xls-r-1b-frisian), [`Reihaneh/wav2vec2_fy_nl_best_frisian_1`](https://huggingface.co/Reihaneh/wav2vec2_fy_nl_best_frisian_1), [`bartelds/whisper-large-v3-turbo-fy-cv22`](https://huggingface.co/bartelds/whisper-large-v3-turbo-fy-cv22), [Omnilingual ASR](https://github.com/facebookresearch/omnilingual-asr) (`omniASR_LLM_7B_v2`).
 
 **AI assistance:** this project was developed with support from AI coding assistants: Claude Code (Anthropic) and Codex (OpenAI). They were used for writing code and documentation, literature and data research, and code review. All experiments were run, and all results measured, locally on the hardware described above. All code, documentation and results went through human review before publication.
